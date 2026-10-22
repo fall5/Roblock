@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bike controls - RobLock</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Figtree:wght@400;600;700&family=Syne:wght@800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/css/site.css">
+<script src="/js/theme.js"></script>
+</head>
+<body>
+
+<header class="topbar">
+  <a class="brand" href="/">
+    <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+    <span>Rob<b>Lock</b></span>
+  </a>
+</header>
+
+<main class="center">
+  <section class="card ctl" aria-live="polite">
+
+    <div id="v-loading">
+      <p class="muted">Connecting to your lock...</p>
+    </div>
+
+    <div id="v-ready" hidden>
+      <p class="device" id="device"></p>
+      <h1 class="state" id="state"></h1>
+      <div class="pair">
+        <button type="button" class="btn" id="b-lock">Lock</button>
+        <button type="button" class="btn" id="b-unlock">Unlock</button>
+      </div>
+      <p class="note" id="note" role="status"></p>
+    </div>
+
+    <div id="v-gone" hidden>
+      <h1 id="gone-title">This session has ended</h1>
+      <p class="muted" id="gone-text">Scan a new QR code to get back in.</p>
+      <a class="btn" href="/">Scan a QR code</a>
+    </div>
+
+  </section>
+</main>
+
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var id = (new URLSearchParams(location.search).get("s") || "").trim();
+  var busy = false, timer = null;
+
+  function show(which) {
+    $("v-loading").hidden = which !== "loading";
+    $("v-ready").hidden = which !== "ready";
+    $("v-gone").hidden = which !== "gone";
+  }
+
+  function gone(title, text) {
+    clearInterval(timer);
+    $("gone-title").textContent = title;
+    $("gone-text").textContent = text;
+    show("gone");
+  }
+
+  function paint(v) {
+    $("device").textContent = v.deviceName;
+    $("state").textContent = v.locked ? "Locked" : "Unlocked";
+    // the button for the current state is filled, the other is outlined
+    $("b-lock").className = "btn" + (v.locked ? "" : " ghost");
+    $("b-unlock").className = "btn" + (v.locked ? " ghost" : "");
+    $("b-lock").setAttribute("aria-pressed", String(v.locked));
+    $("b-unlock").setAttribute("aria-pressed", String(!v.locked));
+  }
+
+  function call(path, method) {
+    return fetch("/api/session/" + encodeURIComponent(id) + path, { method: method })
+      .then(function (r) {
+        return r.json().catch(function () { return {}; }).then(function (d) {
+          return { ok: r.ok, status: r.status, data: d };
+        });
+      });
+  }
+
+  function poll() {
+    if (busy) return;
+    call("", "GET").then(function (r) {
+      if (r.status === 404) gone("This session has ended", "Scan a new QR code to get back in.");
+      else if (r.ok) paint(r.data);
+    }).catch(function () { /* keep the last known state */ });
+  }
+
+  function act(action) {
+    if (busy) return;
+    busy = true;
+    $("b-lock").disabled = true;
+    $("b-unlock").disabled = true;
+    $("note").textContent = "";
+    call("/" + action, "POST").then(function (r) {
+      if (r.ok) paint(r.data);
+      else if (r.status === 404) gone("This session has ended", "Scan a new QR code to get back in.");
+      else $("note").textContent = r.data.error || "That didn't work. Try again.";
+    }).catch(function () {
+      $("note").textContent = "Could not reach the lock. Try again.";
+    }).then(function () {
+      busy = false;
+      $("b-lock").disabled = false;
+      $("b-unlock").disabled = false;
+    });
+  }
+
+  $("b-lock").addEventListener("click", function () { act("lock"); });
+  $("b-unlock").addEventListener("click", function () { act("unlock"); });
+
+  if (!/^\d{5}$/.test(id)) {
+    gone("This link isn't valid", "Scan the QR code from the admin again.");
+    return;
+  }
+
+  call("/join", "POST").then(function (r) {
+    if (r.ok) {
+      paint(r.data);
+      show("ready");
+      timer = setInterval(poll, 4000);
+    } else if (r.status === 429) {
+      gone("Too many tries", "Wait a minute, then scan again.");
+    } else {
+      gone("This session has ended", "Scan a new QR code to get back in.");
+    }
+  }).catch(function () {
+    gone("Could not connect", "Check your connection and open the link again.");
+  });
+})();
+</script>
+</body>
+</html>
